@@ -76,8 +76,10 @@ Identity Key (IK): The cryptographic key pair used for endpoint authentication d
 In an ideal world, aTLS should achieve the following security properties:
 
 **Cryptographic Binding**: The attestation evidence MUST be cryptographically bound to both the specific TLS session and the authentication identity to prevent relay and substitution attacks.
--**Session Binding**: The evidence MUST include a unique session-derived value (e.g., a hash of the handshake transcript for intra-handshake attestation, or a value derived via TLS Exporter for post-handshake attestation). This ensures that the evidence is fresh and bound to the current active channel, preventing an attacker from replaying evidence from a different or previous session.
--**Identity Binding**: : The evidence MUST be cryptographically linked to the public key of the certificate used for authentication (e.g., by including the hash of the Identity Key public key). This ensures that the environment being attested is the same entity that holds the private key used for the TLS connection, preventing key substitution or relay attacks where a healthy TEE provides evidence for an insecure TLS key.
+
+*  **Session Binding**: The evidence MUST include a unique session-derived value (e.g., a hash of the handshake transcript for intra-handshake attestation, or a value derived via TLS Exporter for post-handshake attestation). This ensures that the evidence is fresh and bound to the current active channel, preventing an attacker from replaying evidence from a different or previous session.
+
+* **Identity Binding**: : The evidence MUST be cryptographically linked to the public key of the certificate used for authentication (e.g., by including the hash of the Identity Key public key). This ensures that the environment being attested is the same entity that holds the private key used for the TLS connection, preventing key substitution or relay attacks where a healthy TEE provides evidence for an insecure TLS key.
 
 **Freshness**: The attestation must be fresh to prevent replay attacks. Freshness MUST be guaranteed by incorporating a unique session-specific value into the evidence.
 
@@ -103,14 +105,15 @@ In the real world, protocols face harsh constraints that define the "Lower Bound
 **Middlebox Compatibility**: While TLS 1.3 encrypts many handshake extensions, enterprise networks and strict DPI (Deep Packet Inspection) firewalls can still cause deployment failures. This occurs when custom extensions significantly increase the handshake packet size, triggering fragmentation issues, or when non-standard protocol behavior triggers security heuristics in legacy middleboxes. A viable protocol must ensure that attestation data does not cause unexpected connection resets or packet drops.
 
 
-**Application Friction**: Forcing every application to explicitly handle attestation logic creates a massive deployment barrier. A practical solution must support **Transparent Integration**, where the aTLS logic is encapsulated within a TEE-aware Runtime or a Library Shim. This ensures that existing applications can leverage attestation without modifying their source code or business logic.
+**Application Friction**: Forcing every application to explicitly handle attestation logic creates a massive deployment barrier. A practical solution must support Transparent Integration, where the aTLS logic is encapsulated within a TEE-aware Runtime or a Library Shim. This ensures that existing applications can leverage attestation without modifying their source code or business logic.
 
 **Library Fragmentation**: Not all clients and servers use the latest OpenSSL/BoringSSL. The solution must ideally be backward compatible or implementable as a modular extension.
 
 **Hardware Asymmetry**:
--High-End: Servers with TPMs 2.0 or Intel SGX/TDX can perform complex signing operations during the handshake.
 
--Low-End: IoT devices or highly loaded servers may experience significant latency if the handshake is blocked waiting for hardware signing.
+*  High-End: Servers with TPMs 2.0 or Intel SGX/TDX can perform complex signing operations during the handshake.
+
+*  Low-End: IoT devices or highly loaded servers may experience significant latency if the handshake is blocked waiting for hardware signing.
 
 **Operational Complexity**: Verifying attestation requires a complex infrastructure (Verifier, Policy Engine). If the protocol requires the TLS server to act as the Verifier for the client, it increases server load and state management complexity.
 
@@ -125,13 +128,15 @@ The Lower Bound dictates that the protocol must be resilient to extension stripp
 ## The "Binding" Gap
 The primary tension in aTLS lies in the trade-off between binding strength and implementation complexity.
 
-**Theoretical Upper Bound (Strong Binding)**: To achieve near-zero attack windows, the attestation evidence SHOULD be cryptographically bound to the unique TLS handshake transcript (e.g., via the Transcript Hash as proposed in [draft-fossati-seat-early-attestation]). This ensures that the evidence is inextricably linked to the specific handshake messages, preventing any form of session substitution.
+**Theory**: To achieve near-zero attack windows, the attestation evidence SHOULD be cryptographically bound to the unique TLS handshake transcript (e.g., via the Transcript Hash as proposed in [draft-fossati-seat-early-attestation]). This ensures that the evidence is inextricably linked to the specific handshake messages, preventing any form of session substitution.
 
-**Practical Lower Bound (Implementation Friction)**: In practice, generating a signature over the handshake transcript during the handshake requires deep integration into the TLS state machine. For many production-grade libraries (e.g., OpenSSL, BoringSSL), such modifications are invasive, risk introducing security vulnerabilities, and complicate the upgrade path. To mitigate this, a decoupled implementation pattern can be adopted:
+**Practice**: In practice, generating a signature over the handshake transcript during the handshake requires deep integration into the TLS state machine. For many production-grade libraries (e.g., OpenSSL, BoringSSL), such modifications are invasive, risk introducing security vulnerabilities, and complicate the upgrade path. To mitigate this, a decoupled implementation pattern can be adopted:
 Instead of modifying the core state machine, the TLS stack can be designed to expose a fixed transcript checkpoint (e.g., the hash of messages from ClientHello through ServerHello) to an external attestation shim. This shim acts as an intermediary, passing the checkpoint hash and the identity public key to the TEE for signing. By treating the attestation as a side-car operation triggered at a specific handshake event, the strong binding of a transcript hash can be achieved without invasive changes to the TLS library's internal logic.
 
 **Selection Decision**: The selection of the binding mechanism should be driven by the deployment environment:
-- **For Controlled Environments**: Mechanisms using the **Handshake Transcript Hash** are RECOMMENDED to achieve maximum security strength.
+
+- **For Controlled Environments**: Mechanisms using the Handshake Transcript Hash are RECOMMENDED to achieve maximum security strength.
+
 - **For General Deployment**: Mechanisms using the TLS Exporter [RFC5705] are RECOMMENDED to bridge the gap. By deriving a unique session-binding value outside the strict handshake state machine, the attestation can be generated as a modular extension. This provides a cryptographically sound binding to the session while respecting the lower bound of library modularity and deployability.
 
 
@@ -141,11 +146,16 @@ Instead of modifying the core state machine, the TLS stack can be designed to ex
 **Practice**: The path contains F5 load balancers, legacy proxies, and SaaS inspection tools. While encrypting payloads prevents content-based interference, middleboxes may still strip unrecognized TLS extensions (e.g., remoteAttestation in [draft-fossati-seat-early-attestation]) entirely during the handshake.
 
 **Capability Negotiation**: To prevent connection failures (false positives) when attestation is unsupported, the protocol MUST use a TLS Extension to signal capabilities during the handshake.
+
 - **Extension Present**: The server explicitly supports attestation. If evidence is subsequently missing or invalid, the client MUST abort (Hard Fail).
+
 - **Extension Absent**: The server does not support attestation (or the extension was stripped). The client MAY fallback to standard TLS (Soft Fail), depending on local policy.
+
 **Selection Decision**: The placement of evidence is a trade-off between security and robustness:
-- **In-Handshake**: Strongest security via transcript binding (Attestation Binder). Payload encryption mitigates content-based stripping, but the session remains vulnerable to Extension-ID stripping by legacy middleboxes.
-- **Post-Handshake **: Most robust against middlebox interference as it bypasses handshake extension filtering.
+
+- **Intra-Handshake**: Strongest security via transcript binding (Attestation Binder). Payload encryption mitigates content-based stripping, but the session remains vulnerable to Extension-ID stripping by legacy middleboxes.
+
+- **Post-Handshake**: Most robust against middlebox interference as it bypasses handshake extension filtering.
 Crucially, the decision to abort or fallback MUST be based on the negotiated capability (Extension presence) rather than the mere absence of evidence.
 
 ## The "Latency" Gap
@@ -155,8 +165,11 @@ Crucially, the decision to abort or fallback MUST be based on the negotiated cap
 **Practice**: TPM signing takes 50ms-200ms; SGX quoting is variable.
 
 **Selection Decision**: To avoid the performance penalty of blocking the TLS handshake, the attestation timing should be configurable depending on the security policy:
+
 *   **Strict Mode (Synchronous)**: Attestation is mandatory and blocking. The handshake fails if evidence is not validated before the `Finished` message. Use this for high-security cores where no unverified data can ever enter the system.
+
 *   **Balanced Mode (Asynchronous/Restricted)**: The connection is established immediately, but enters a "Restricted" state. Basic connectivity is allowed, but sensitive operations are blocked until the background attestation is validated.
+
 *   **Permissive Mode (Optimistic)**: Attestation runs fully in the background. Application data flows without restriction, and the session is terminated only if the delayed attestation result returns a failure. Use this for low-risk services where availability is prioritized over strict platform integrity.
 
 
@@ -176,7 +189,7 @@ Crucially, the decision to abort or fallback MUST be based on the negotiated cap
   - **Token-based Session Binding**: To mitigate the lack of cryptographic binding, raw attestation evidence SHOULD NOT be used directly. Instead, a trusted intermediary (e.g., a NAC Gateway) MAY validate the evidence and issue a short-lived, cryptographically bound token (such as a TLS-PSK identity). This anchors the pre-handshake trust to the subsequent TLS session.
   - **Out-of-Band Channel Pairing**: To reduce the risk of substitution attacks, the attestation exchange SHOULD be performed over a secure control plane or a dedicated management channel that is logically paired with the data plane used for the TLS handshake.
 - **Attack Window**: Near-infinite (attacker can intervene before any TLS message is sent; there is no cryptographic binding to the session)
-- **Verdict**: Raw Pre-handshake Attestation is not recommended due to weak session binding.
+- **Verdict**: Raw Pre-handshake Attestation is not recommended due to weak session binding; however, token-based approaches are suitable for network admission control (NAC).
 
 ## Intra-Handshake Attestation
 
@@ -186,7 +199,7 @@ Crucially, the decision to abort or fallback MUST be based on the negotiated cap
   - Enables mutual authentication with attestation.
   - No additional round-trips.
 - **Cons**:
-- **Handshake Latency**: TEE quoting/signing can introduce significant delays, potentially causing handshake timeouts.
+  - **Handshake Latency**: TEE quoting/signing can introduce significant delays, potentially causing handshake timeouts.
   - **Implementation Complexity**: Requires tight integration between the TLS stack and the TEE/Attestation service.
   - **Middlebox Risk**: Despite encryption, some aggressive network filters may still flag unusual handshake patterns.
 - **Attack Window**: Near-zero (verification occurs synchronously with 
@@ -195,7 +208,7 @@ the handshake; any tampering with the transcript invalidates the session)
   - **Privacy-Preserving Transport**: To mitigate middlebox interference (e.g., extension stripping), attestation evidence SHOULD be placed within encrypted handshake messages (e.g., EncryptedExtensions or Certificate in TLS 1.3). This masks the attestation data from network observers, preventing targeted stripping by middleboxes.
   - **Modular Binding**: To reduce integration complexity, the binding between attestation and the session SHOULD be achieved via a decoupled derivation process. By using a binder independent of the main TLS key schedule, implementations can avoid modifying the core TLS state machine and the underlying core library implementation. This allows the attestation logic to be integrated as a modular extension without requiring invasive patches to standard, off-the-shelf TLS stacks.
   - **Asynchronous Verification**: To prevent blocking the TLS handshake (which may cause timeouts due to TEE latency), implementations MAY support a Background Check model. In this model, the connection is established first, and evidence is verified asynchronously, with the application layer enforcing a "pending-verification" state to restrict access to sensitive resources until the process completes.
-- **Verdict**: High security, low deployability. Suitable only in controlled environments.
+- **Verdict**: Maximum security, conditional deployability. Highly recommended for controlled environments and high-assurance use cases.
 
 ##  Post-Handshake Attestation
 
@@ -214,7 +227,7 @@ the handshake; any tampering with the transcript invalidates the session)
   - **Strong Session Anchoring**: To bridge the "binding gap," the post-handshake evidence MUST be cryptographically bound to the session using TLS Exporters [RFC5705]. By incorporating exporter-derived keying material into the attestation signature, the evidence is anchored to the specific session transcript, preventing replay or relay attacks.
   - **Application-Level Guarding**: To mitigate the temporal attack window (the period between handshake completion and verification), the Relying Party SHOULD implement an Application-Level Guard. The session should be treated as "Unverified" by default, and high-privilege API calls or data transfers SHOULD be blocked until the attestation is successfully validated.
   - **Freshness Enforcement**: To prevent the use of stale evidence, the verifier SHOULD provide a fresh nonce or a timestamp challenge that the attester must incorporate into the signed evidence.
-- **Verdict**: Best balance of security and deployability.
+- **Verdict**: High deployability and robust security. Highly recommended for general-purpose uncontrolled network environments.
 
 #     Failure Mode Analysis
 
